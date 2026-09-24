@@ -132,22 +132,27 @@ test('doctor: reports drift, never mutates — sunset-but-enabled, enabled-but-n
   mkunit(root, 'fine', svc('finep', { resident: res }));
   mkunit(root, 'ghost', svc('ghostp', { resident: res }));
   mkunit(root, 'zombie', svc('zombiep', { lifecycle: 'sunset', resident: res }));   // declared off, yet its port answers
+  mkunit(root, 'relaunch', svc('relaunchp', { resident: res }));   // off + booted out, but plist not disabled → back at next login
+  mkunit(root, 'parked', svc('parkedp', { resident: res }));       // off + plist + disable override → stays off
   const fleetFile = join(root, 'fleet.local.json');
   writeFileSync(fleetFile, JSON.stringify({
     gatewayPort: 48790,
-    ports: { sunsetp: 48781, finep: 48782, ghostp: 48783, zombiep: 48784 },
-    units: { sunsetp: { enabled: true }, finep: { enabled: true }, ghostp: { enabled: true }, zombiep: { enabled: false } },
+    ports: { sunsetp: 48781, finep: 48782, ghostp: 48783, zombiep: 48784, relaunchp: 48785, parkedp: 48786 },
+    units: { sunsetp: { enabled: true }, finep: { enabled: true }, ghostp: { enabled: true }, zombiep: { enabled: false }, relaunchp: { enabled: false }, parkedp: { enabled: false } },
   }));
   const plistDir = join(root, 'LaunchAgents');
   mkdirSync(plistDir, { recursive: true });
-  for (const id of ['sunsetp', 'finep', 'ghostp']) writeFileSync(join(plistDir, 'com.regkit.fleet.' + id + '.plist'), '<plist/>');
+  for (const id of ['sunsetp', 'finep', 'ghostp', 'relaunchp', 'parkedp']) writeFileSync(join(plistDir, 'com.regkit.fleet.' + id + '.plist'), '<plist/>');
   const r = await doctor({
     roots: [root], fleetFile, now, plistDir,
     probe: async (port) => port === 48790 || port === 48782 || port === 48784, // gateway + finep + the zombie listen; ghostp doesn't
     listProcesses: async () => [{ pid: 1, etime: '01:00', cmd: 'node src/cli.mjs watch' }], // everyone pattern-matches alive
     listLaunchd: async () => new Set(['com.regkit.fleet.gateway', 'com.regkit.fleet.finep']),
+    listDisabled: async () => new Set(['com.regkit.fleet.parkedp']),
   });
   const byId = Object.fromEntries(r.rows.map((x) => [x.id, x]));
+  assert.ok(byId.relaunchp.drifts.some((d) => d.includes('下次登录会被 launchd 重新拉起')), 'off but not disabled comes back after reboot');
+  assert.ok(!byId.parkedp.drifts.some((d) => d.includes('重新拉起')), 'disable override keeps an off unit off across logins');
   assert.ok(byId.sunsetp.drifts.some((d) => d.includes('期望态还开着')));
   assert.ok(byId.ghostp.drifts.some((d) => d.includes('launchd 没加载')));
   assert.ok(!byId.ghostp.drifts.some((d) => d.includes('没在听')), 'a silent project port is the norm (embedded gateway is debug-only; the fleet gateway serves)');
@@ -173,6 +178,7 @@ test('doctor: clean fleet reports ok (gateway + one healthy unit)', async () => 
     probe: async () => true,
     listProcesses: async () => [{ pid: 1, etime: '01:00', cmd: 'node src/cli.mjs watch' }],
     listLaunchd: async () => new Set(['com.regkit.fleet.gateway', 'com.regkit.fleet.finep']),
+    listDisabled: async () => new Set(),
   });
   assert.equal(r.ok, true);
   assert.equal(r.rows[0].drifts.length, 0);

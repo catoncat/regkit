@@ -63,18 +63,37 @@ export function renderPlist({ label, cmd, cwd, logPath, keepAlive = true, interv
   return lines.join('\n');
 }
 
-/** launchctl wrappers — external side effects, kept thin (not unit-tested). */
+/** launchctl wrappers — external side effects, kept thin (not unit-tested).
+ *  bootout alone only lasts until the next login: launchd reloads every plist in
+ *  ~/Library/LaunchAgents at login and RunAtLoad starts it again. Turning a unit
+ *  off therefore also sets the persistent `launchctl disable` override; turning it
+ *  on clears that override first (bootstrap of a disabled label fails). */
 export async function bootstrapUnit({ id, plistPath = null } = {}) {
   const uid = process.getuid?.();
   if (uid == null) throw new Error('no uid on this platform');
   const path = plistPath ?? plistPathFor(id);
-  await execFileP('launchctl', ['bootout', 'gui/' + uid + '/' + labelFor(id)]).catch(() => {});
+  const target = 'gui/' + uid + '/' + labelFor(id);
+  await execFileP('launchctl', ['enable', target]);
+  await execFileP('launchctl', ['bootout', target]).catch(() => {});
   return execFileP('launchctl', ['bootstrap', 'gui/' + uid, path]);
 }
 export async function bootoutUnit({ id } = {}) {
   const uid = process.getuid?.();
   if (uid == null) throw new Error('no uid on this platform');
-  return execFileP('launchctl', ['bootout', 'gui/' + uid + '/' + labelFor(id)]).catch(() => {});
+  const target = 'gui/' + uid + '/' + labelFor(id);
+  await execFileP('launchctl', ['disable', target]);
+  return execFileP('launchctl', ['bootout', target]).catch(() => {});
+}
+
+/** Labels carrying the persistent disable override (`launchctl print-disabled`).
+ *  Older macOS prints `=> true`, newer `=> disabled`. */
+export async function listLaunchdDisabled() {
+  const uid = process.getuid?.();
+  if (uid == null) return new Set();
+  const { stdout } = await execFileP('launchctl', ['print-disabled', 'gui/' + uid]);
+  const out = new Set();
+  for (const m of stdout.matchAll(/"([^"]+)"\s*=>\s*(true|disabled)\b/g)) out.add(m[1]);
+  return out;
 }
 
 /** launchctl list -> Set of loaded labels (injectable for tests). */

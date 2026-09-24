@@ -23,7 +23,7 @@ import {
   DEFAULT_ROOTS, DEFAULT_FLEET_FILE, validateService, scanServices,
   loadFleetLocal, saveFleetLocal, allocPort, modelsOf, fleetEventsFileFor,
 } from './fleet-decl.mjs';
-import { labelFor, plistPathFor, renderPlist, listLaunchdLabels } from './fleet-launchd.mjs';
+import { labelFor, plistPathFor, renderPlist, listLaunchdLabels, listLaunchdDisabled } from './fleet-launchd.mjs';
 
 // Declarations (fleet-decl) and launchd (fleet-launchd) are separate modules;
 // re-exported here so 'regkit/fleet' stays the one capability-layer import.
@@ -531,12 +531,13 @@ export async function tick({
  */
 export async function doctor({
   roots = DEFAULT_ROOTS, fleetFile = DEFAULT_FLEET_FILE, now = new Date(),
-  probe = probePort, listProcesses = psList, listLaunchd = listLaunchdLabels,
+  probe = probePort, listProcesses = psList, listLaunchd = listLaunchdLabels, listDisabled = listLaunchdDisabled,
   plistDir = join(homedir(), 'Library', 'LaunchAgents'),
 } = {}) {
   const st = await status({ roots, fleetFile, now, probe, listProcesses, includeOrphans: false });
   const decls = new Map(scanServices({ roots }).filter((f) => f.decl).map((f) => [f.decl.id, f.decl]));
   const loaded = await listLaunchd();
+  const disabled = await listDisabled();
   const gatewayListening = await probe(st.gateway.port).catch(() => false);
   const gatewayLoaded = loaded.has(labelFor('gateway'));
   const gatewayDrifts = [];
@@ -567,10 +568,14 @@ export async function doctor({
     // (No "port not listening" drift: a project's own gateway is
     // debug-only (<UP>_EMBED_GATEWAY=1); the fleet gateway serves every pool. The port table
     // only reserves numbers so a debug gateway never collides.)
+    // bootout is session-scoped: a plist left in LaunchAgents without the disable override
+    // comes back (RunAtLoad) at the next login, even though the unit is declared off.
+    if (managed && !u.enabled && plistExists && !disabled.has(label)) drifts.push('已关但下次登录会被 launchd 重新拉起(plist 还在且没 disable;跑 fleet set-mode ' + u.id + ' off)');
+    if (managed && u.enabled && disabled.has(label)) drifts.push('期望在跑但 launchd 里被 disable 了(跑 fleet set-mode ' + u.id + ' auto)');
     if (managed && u.enabled && !plistExists) drifts.push('plist 文件不存在(没 adopt 或被删了)');
     rows.push({
       id: u.id, lifecycle: u.lifecycle, enabled: u.enabled, state: u.state,
-      launchd_loaded: isLoaded, plist_exists: plistExists,
+      launchd_loaded: isLoaded, launchd_disabled: disabled.has(label), plist_exists: plistExists,
       port: u.port, port_listening: portListening, drifts,
     });
   }
