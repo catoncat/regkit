@@ -1,0 +1,21 @@
+{
+  "id": "example",
+  "kind": "registrar",
+  "lifecycle": "active",
+  "protocol": "src/protocol.mjs",
+  "gateway": {
+    "prefix": "ex",
+    "base": "https://api.example.com/v1",
+    "port": 48785,
+    "authHeader": "bearer",
+    "userAgent": null,
+    "aliases": { "cheap": "vendor/real-model-id" },
+    "catalog": "upstream",
+    "dialect": { "injectFields": {}, "rewriteRoles": {}, "ensureAssistantFields": {}, "stripOn400": [] },
+    "via": null
+  },
+  "accounts": "data/accounts.jsonl",
+  "usage": "data/usage.jsonl",
+  "rates": { "in": 0.0004, "out": 0.0004 },
+  "spawn": { "cmd": "node src/cli.mjs register --count {{need}} --workers {{workers}} --probe", "pattern": "src/cli.mjs register" }
+}

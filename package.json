@@ -1,0 +1,44 @@
+{
+  "name": "regkit",
+  "version": "0.1.0",
+  "description": "Zero-dependency building blocks for OpenAI-compatible gateways over pools of API keys: rotation, usage ledger, multi-upstream routing, provisioning and a resident watcher.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./config": "./src/config.mjs",
+    "./logger": "./src/logger.mjs",
+    "./pacer": "./src/pacer.mjs",
+    "./mailbox": "./src/mailbox.mjs",
+    "./domains": "./src/domains.mjs",
+    "./accounts": "./src/accounts.mjs",
+    "./http": "./src/http.mjs",
+    "./usage": "./src/usage.mjs",
+    "./gateway": "./src/gateway.mjs",
+    "./pool": "./src/pool.mjs",
+    "./wire": "./src/wire.mjs",
+    "./hub": "./src/hub.mjs",
+    "./supply": "./src/supply.mjs",
+    "./watch": "./src/watch.mjs",
+    "./watch-render": "./src/watch-render.mjs",
+    "./tui": "./src/tui.mjs",
+    "./events": "./src/events.mjs",
+    "./lock": "./src/lock.mjs",
+    "./names": "./src/names.mjs",
+    "./jsonl": "./src/jsonl.mjs",
+    "./fleet": "./src/fleet.mjs",
+    "./fleet-decl": "./src/fleet-decl.mjs",
+    "./fleet-launchd": "./src/fleet-launchd.mjs",
+    "./health": "./src/health.mjs",
+    "./fleet-hub": "./src/fleet-hub.mjs",
+    "./fleet-tui": "./src/fleet-tui.mjs",
+    "./patrol": "./src/patrol.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs && npm run --silent test:skeleton",
+    "test:skeleton": "cd skeleton && { test -e node_modules/regkit || { mkdir -p node_modules && ln -sfn ../.. node_modules/regkit; }; } && node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

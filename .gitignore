@@ -1,0 +1,7 @@
+node_modules/
+data/
+fleet.local.json
+.env.local
+*.log
+*.tmp
+.DS_Store

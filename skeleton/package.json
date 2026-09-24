@@ -1,0 +1,19 @@
+{
+  "name": "<upstream>-pool",
+  "version": "0.1.0",
+  "description": "Account provisioning, key pool and gateway for <upstream>. Protocol layer only — machinery comes from regkit.",
+  "type": "module",
+  "bin": {
+    "<short>": "src/cli.mjs"
+  },
+  "scripts": {
+        "test": "node --test"
+  },
+  "dependencies": {
+    "regkit": "file:../regkit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
