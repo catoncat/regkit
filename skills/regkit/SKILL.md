@@ -37,8 +37,9 @@ description: >-
 
 Measure the upstream before encoding it: record real request/response pairs, status
 codes and rate-limit behaviour, and write only observed facts into `protocol.mjs`.
-If the upstream's signup requires a real browser, HTTP replay will not work. You then
-need your own browser-driven provisioning; the pool, gateway and watcher still apply.
+If the upstream's signup requires a real browser (Cloudflare Turnstile and similar),
+HTTP replay will not work. Use regkit-headed (https://github.com/catoncat/regkit-headed,
+Python + real Chrome) for that step; the pool, gateway and watcher still apply.
 
 ## Mail dependency
 

@@ -84,6 +84,10 @@ Then replace three files with the real upstream's facts:
 `cli.mjs`, `register.mjs`, `gateway.mjs` and `watch.mjs` are thin wiring and
 rarely change. See [skeleton/README.md](skeleton/README.md) for the protocol contract.
 
+If the upstream's pages sit behind Cloudflare Turnstile or a similar browser check,
+HTTP replay won't get through. Use [regkit-headed](https://github.com/catoncat/regkit-headed)
+(Python, real Chrome) for that part, and keep the pool, gateway and watcher here.
+
 ## Gateway
 
 Single upstream:
@@ -169,6 +173,11 @@ and extend regkit. Copy or symlink it into your agent's skills directory.
 ```bash
 npm test    # root suite + skeleton contract suite
 ```
+
+## Related
+
+- [regkit-headed](https://github.com/catoncat/regkit-headed): real-Chrome primitives for pages behind Cloudflare Turnstile
+- [cloud-mail](https://github.com/catoncat/cloud-mail): self-hosted receive-only mail used for verification codes
 
 ## License
 
