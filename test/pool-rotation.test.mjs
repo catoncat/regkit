@@ -280,3 +280,24 @@ test('400: a genuine client error is still passed through untouched (no drain)',
   assert.equal(events.find((e) => e.event === 'ai.fail').klass, 'client');
   assert.equal(events.find((e) => e.event === 'ai.fail').klass_raw, undefined);
 });
+
+// ── nothing offered must not be reported as "exhausted" ──
+test('no key offered: the caller is told the pool is not issuing, not that it is exhausted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rk-nokey-'));
+  const { gw, eventsFile } = mkPool({ dir, accounts: twoKeys });
+  writeFileSync(join(dir, 'usage.jsonl'), 'GARBAGE\nALSO GARBAGE\n');   // fail-closed ledger
+  const stub = stubFetch({});
+  const r = res();
+  try {
+    await gw.handleChat(req, r, body('hi'));
+  } finally { stub.restore(); }
+  assert.equal(r._state.code, 503);
+  const payload = JSON.parse(r._state.body);
+  assert.equal(payload.error.type, 'pool_unavailable');
+  assert.match(payload.error.message, /ledger/, 'the reason is named, not faked as an empty pool');
+  assert.doesNotMatch(payload.error.message, /exhausted/);
+  assert.equal(stub.seen.length, 0, 'no upstream call without an accountable budget');
+  const ev = readEvents(eventsFile).find((e) => e.event === 'pool.exhausted');
+  assert.equal(ev.tried, 0);
+  assert.match(ev.reason, /ledger/);
+});

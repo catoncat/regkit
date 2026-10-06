@@ -18,7 +18,7 @@
 
 import { appendJsonl, readJsonl, ensureDir, NL } from './jsonl.mjs';
 import { withFileLock, lockPathFor } from './lock.mjs';
-import { appendFileSync, existsSync, readFileSync, writeFileSync, renameSync, statSync, openSync, readSync, closeSync, unlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync, renameSync, statSync, openSync, readSync, closeSync, fstatSync, unlinkSync } from 'node:fs';
 
 const errText = (err) => String(err?.message || err).slice(0, 120);
 
@@ -118,19 +118,23 @@ export function createUsageReader(path) {
         drainUsageSpool(path);
         offset = 0; rows = []; corrupt = false;   // the ledger grew behind our back
       }
-      let st;
-      try { st = statSync(path); } catch (err) {
+      // The size must come from the fd we actually read, never from a separate
+      // stat: a compaction (tmp + rename) landing between stat and open left us
+      // reading the NEW file at the OLD offset — i.e. mid-line. One bad parse then
+      // latched `corrupt`, and the pool fail-closed (zero keys offered, reported as
+      // "exhausted") until someone restarted the gateway.
+      let fd;
+      try { fd = openSync(path, 'r'); } catch (err) {
         if (err?.code === 'ENOENT') { offset = 0; rows = []; corrupt = false; state = 'missing'; return { state, rows: [] }; }
         state = 'unreadable';
         return { state, rows };
       }
-      if (st.size < offset) { offset = 0; rows = []; corrupt = false; }   // compacted under us
-      if (st.size > offset) {
-        const len = st.size - offset;
-        const buf = Buffer.alloc(len);
-        let fd;
-        try {
-          fd = openSync(path, 'r');
+      try {
+        const size = fstatSync(fd).size;
+        if (size < offset) { offset = 0; rows = []; corrupt = false; }   // compacted under us
+        if (size > offset) {
+          const len = size - offset;
+          const buf = Buffer.alloc(len);
           const n = readSync(fd, buf, 0, len, offset);
           const text = buf.subarray(0, n).toString('utf8');
           const cut = text.lastIndexOf(NL);
@@ -141,12 +145,25 @@ export function createUsageReader(path) {
             }
             offset += Buffer.byteLength(text.slice(0, cut + 1), 'utf8');
           }
-        } catch (err) {
-          state = 'unreadable';
-          return { state, rows };
-        } finally { if (fd !== undefined) { try { closeSync(fd); } catch { /* ignore */ } } }
+        }
+      } catch (err) {
+        state = 'unreadable';
+        return { state, rows };
+      } finally { try { closeSync(fd); } catch { /* ignore */ } }
+      if (corrupt) {
+        // The incremental parse is only a guess, so a full strict read has the
+        // final say: if the ledger is genuinely unusable we stay fail-closed, but a
+        // mid-read rewrite (or bytes we merely stepped into) resyncs on the spot
+        // instead of starving every request until the next restart.
+        const full = readUsageState(path);
+        if (full.state === 'unreadable') { state = 'unreadable'; return { state, rows }; }
+        rows = full.rows;
+        corrupt = false;
+        state = full.state;
+        try { offset = statSync(path).size; } catch { offset = 0; }
+        return { state, rows };
       }
-      state = corrupt ? 'unreadable' : 'ok';
+      state = 'ok';
       return { state, rows };
     },
     get offset() { return offset; },

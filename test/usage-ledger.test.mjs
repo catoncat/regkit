@@ -4,7 +4,7 @@
 // ever need).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync, chmodSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -208,4 +208,41 @@ test('pool: an unreadable ledger refuses to hand out keys (fail closed)', () => 
   writeFileSync(usagePath, row('2026-09-17T11:00:00Z', 'a@x', 1) + '\n');
   assert.equal(pool.borrow(null)?.email, 'a@x');
   assert.equal(pool.health().ledger.state, 'ok');
+});
+// The 2026-10-06 outage: the 5-minute tick compacted the ledger (tmp + rename)
+// while a request was in flight. The reader had stat'd the OLD size and then
+// opened the NEW file, so it parsed from the middle of a line -> `corrupt` latched
+// -> the pool fail-closed and reported "exhausted after 0 key attempt(s)" until
+// someone restarted the gateway. A rewrite that leaves the file no smaller must
+// resync, not poison the reader.
+test('reader: a mid-read compaction rewrite resyncs instead of latching unreadable', () => {
+  const dir = tmp();
+  const usagePath = join(dir, 'usage.jsonl');
+  const first = [row('2026-09-17T11:00:00Z', 'a@x', 1), row('2026-09-17T11:00:01Z', 'b@x', 1)];
+  writeFileSync(usagePath, first.join('\n') + '\n');
+  const reader = createUsageReader(usagePath);
+  assert.equal(reader.read().rows.length, 2);
+  const offsetBefore = reader.offset;
+
+  // Compaction: the replacement keeps FEWER rows but its first row is longer than
+  // the one it replaced, so the offset we already consumed now lands in the middle
+  // of a line — exactly what the tick's tmp+rename rewrite did at 02:57.
+  const kept = [
+    JSON.stringify({ ts: '2026-09-17T12:00:00Z', email: 'a@x', cost_usd: 1, kind: 'gateway', note: 'y'.repeat(80) }),
+    row('2026-09-17T12:00:01Z', 'b@x', 1),
+    row('2026-09-17T12:00:02Z', 'c@x', 1),
+  ];
+  const tmpFile = usagePath + '.tmp-test';
+  writeFileSync(tmpFile, kept.join('\n') + '\n');
+  renameSync(tmpFile, usagePath);
+
+  const after = reader.read();
+  assert.equal(after.state, 'ok', 'a benign rewrite must not be reported as an unreadable ledger');
+  assert.equal(after.rows.length, 3, 'rows are resynced from the authoritative full read');
+  assert.equal(readUsageState(usagePath).state, 'ok');
+
+  // ...while genuine corruption still fails closed.
+  writeFileSync(usagePath, 'GARBAGE\nALSO GARBAGE\n' + row('2026-09-17T13:00:00Z', 'a@x', 1) + '\n');
+  const broken = createUsageReader(usagePath).read();
+  assert.equal(broken.state, 'unreadable');
 });

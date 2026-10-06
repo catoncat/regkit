@@ -154,6 +154,17 @@ export function createKeyPool(provider) {
       .filter((a) => eligible(a) && !exhausted.has(a.email) && !ledgerSuspect.has(a.email) && balanceEligible(a, rows));
   }
 
+  /** Why did eligibleAccounts() come back empty? Message only, no side effects. */
+  function issuedNoneReason() {
+    if (!ledgerHealthy()) return `the usage ledger is ${ledgerState} — refusing to issue budget it cannot account for`;
+    const all = readAccounts(accountsFile).filter(eligible);
+    if (!all.length) return 'no eligible account (none verified with a key)';
+    if (all.every((a) => exhausted.has(a.email))) return 'every key is already drained';
+    const suspect = all.filter((a) => ledgerSuspect.has(a.email));
+    if (suspect.length === all.length) return 'every key has an unrecorded call against it';
+    return 'no account is balance-eligible (anchor unknown or spent)';
+  }
+
   /**
    * Borrow: honour conversation affinity first, else least-recently-used.
    * `exclude` = the keys already tried in THIS request. Rotation depends on it:
@@ -367,6 +378,16 @@ export function createKeyPool(provider) {
       await sleep(reason === 'concurrency' ? 1000 : 400); // backoff, rotate
     }
 
+    if (!tried.size) {
+      // Nothing was even attempted: the pool declined to hand out a key. Reporting
+      // "exhausted after 0 key attempt(s)" reads as an empty pool, which is the
+      // opposite of the truth (11 keys may be sitting right there — just no ledger
+      // we can trust), and it sent the caller hunting in the wrong place.
+      const why = issuedNoneReason();
+      log.event('pool.exhausted', { upstream: id, tried: 0, last: null, reason: why });
+      sendJson(res, 503, { error: { message: `${poolName} pool issued no key: ${why}`, type: 'pool_unavailable' } });
+      return;
+    }
     sendJson(res, 503, {
       error: {
         message: `${poolName} pool exhausted after ${tried.size} key attempt(s). Last: ${lastHard ? lastHard.status + ' ' + lastHard.reason : 'n/a'}`,
