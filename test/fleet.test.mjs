@@ -226,3 +226,25 @@ test('status: stale when alive but events older than threshold', async () => {
   assert.equal(out.units[0].state, 'stale');
   assert.ok(out.units[0].last_event_age_min > 4000);
 });
+
+test('status: a retired pool reports no balance (its credits cannot be spent) but keeps the last figure', async () => {
+  const root = tmp();
+  const now = new Date('2026-10-06T03:00:00Z');
+  // retired unit: money on paper, upstream serves none of it
+  write(join(root, 'gone', 'data', 'service.json'), JSON.stringify({ id: 'gone', lifecycle: 'dead', accounts: 'data/accounts.jsonl' }));
+  write(join(root, 'gone', 'data', 'accounts.jsonl'), [
+    JSON.stringify({ email: 'a@x', status: 'verified', balance_usd: 500, checked_at: '2026-10-01T00:00:00Z' }),
+    JSON.stringify({ email: 'b@x', status: 'verified', balance_usd: 433.25, checked_at: '2026-10-01T00:00:00Z' }),
+  ].join('\n') + '\n');
+  // live unit: same shape, still spendable
+  write(join(root, 'live', 'data', 'service.json'), JSON.stringify({ id: 'live', accounts: 'data/accounts.jsonl' }));
+  write(join(root, 'live', 'data', 'accounts.jsonl'), JSON.stringify({ email: 'c@x', status: 'verified', balance_usd: 7, checked_at: '2026-10-06T00:00:00Z' }) + '\n');
+  const fleetFile = join(root, 'fleet.json');
+  writeFileSync(fleetFile, JSON.stringify({ units: {} }));
+  const out = await status({ roots: [root], fleetFile, now, probe: async () => false, listProcesses: async () => [] });
+  const byId = Object.fromEntries(out.units.map((u) => [u.id, u]));
+  assert.equal(byId.gone.pool.balance, null, 'no spendable balance is claimed');
+  assert.equal(byId.gone.pool.balance_known, 0);
+  assert.equal(byId.gone.pool.retired_balance_usd, 933.25, 'the last known figure survives for the detail view');
+  assert.equal(byId.live.pool.balance, 7, 'a live pool is untouched');
+});

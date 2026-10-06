@@ -111,6 +111,9 @@ export function gatewayLabel(u, gw = { up: true }) {
 export function balanceCell(u, now = new Date()) {
   const pool = u.pool;
   if (!pool) return '—';
+  // Retired: the money may well have been real, but nothing can spend it now — and
+  // \"未知\" would read as "maybe still there\". Not applicable, not unknown.
+  if (u.effective_lifecycle === 'dead') return '— 已退役';
   if (pool.ledger === 'unreadable') return '未知·账本读不透';
   if (!(pool.balance_known > 0)) return (pool.verified ?? 0) > 0 ? '未知' : '—';
   let cell = ('$' + Number(pool.balance).toFixed(2)).padStart(COL.money);
@@ -292,8 +295,10 @@ export function renderDetail({ unit, health, gateway = { port: 0, up: true }, no
 
   const pool = unit.pool;
   row('余额', pool
-    ? balanceCell(unit, now).trim() + c(ansi.dim, ' · ' + (pool.balance_known ?? 0) + '/' + pool.verified + ' 验证号有数 · ' + pool.total + ' 号总'
-      + (pool.spend_local_usd ? ' · 本地已花 $' + pool.spend_local_usd : '') + ' · 数更新于 ' + fmtAge(pool.as_of, now))
+    ? (unit.effective_lifecycle === 'dead'
+      ? balanceCell(unit, now).trim() + c(ansi.dim, ' · 退役前 $' + Number(pool.retired_balance_usd ?? 0).toFixed(2) + ' / ' + pool.verified + ' 号 · 不再计入合计')
+      : balanceCell(unit, now).trim() + c(ansi.dim, ' · ' + (pool.balance_known ?? 0) + '/' + pool.verified + ' 验证号有数 · ' + pool.total + ' 号总'
+        + (pool.spend_local_usd ? ' · 本地已花 $' + pool.spend_local_usd : '') + ' · 数更新于 ' + fmtAge(pool.as_of, now)))
     : c(ansi.dim, '没有池子'));
 
   if (health) {

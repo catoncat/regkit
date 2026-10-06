@@ -84,6 +84,9 @@ test('balanceCell: right-aligned money, age and unknown-count caveats, never a f
   assert.equal(balanceCell(unit({ pool: { balance: 0, balance_known: 0, verified: 3, as_of: daysAgo(1) } }), NOW), '未知');
   assert.equal(balanceCell(unit({ pool: { balance: 0, balance_known: 0, verified: 0, as_of: daysAgo(1) } }), NOW), '—');
   assert.equal(balanceCell(unit({ pool: { ledger: 'unreadable', balance: 500, balance_known: 0, verified: 3 } }), NOW), '未知·账本读不透');
+  // a retired pool's credits are a claim, not spendable cash: never a $ figure,
+  // and not "未知" either (which reads as "maybe still there")
+  assert.equal(balanceCell(unit({ effective_lifecycle: 'dead', pool: { balance: null, balance_known: 0, verified: 11, retired_balance_usd: 933.25 } }), NOW), '— 已退役');
 });
 
 test('vocabularies: reason codes, lifecycle, keeper actions all have one plain-Chinese name', () => {

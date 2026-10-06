@@ -181,10 +181,17 @@ async function observeUnit({ unitDir, decl, fleetLocal, now, probe, probeExterna
   const delisted = delistedModelsOf(health);
   const models = modelsOf(decl);
   const modelsAvailable = gate.gated ? [] : models.filter((m) => !delisted.includes(m));
-  const pool = decl.accounts ? poolSummary(decl.accounts, decl.usage) : null;
+  const poolRaw = decl.accounts ? poolSummary(decl.accounts, decl.usage) : null;
   // D6: sunset pool drained to zero => effectively dead (leaves the daily view).
   // Only on a KNOWN balance: an unreadable ledger must not retire a unit.
-  const effectiveLifecycle = decl.lifecycle === 'sunset' && pool && pool.balance_known > 0 && pool.balance <= 0 ? 'dead' : decl.lifecycle;
+  const effectiveLifecycle = decl.lifecycle === 'sunset' && poolRaw && poolRaw.balance_known > 0 && poolRaw.balance <= 0 ? 'dead' : decl.lifecycle;
+  // A retired pool's balance is a CLAIM, not cash: the upstream no longer serves
+  // those keys, so counting it in any total answers "how much can I spend" with a
+  // number nobody can spend (onetriangle advertised $933 while every key 401'd).
+  // The figure is kept for the detail view, never as a balance.
+  const pool = poolRaw && effectiveLifecycle === 'dead'
+    ? { ...poolRaw, retired_balance_usd: poolRaw.balance, balance: null, balance_known: 0 }
+    : poolRaw;
   return {
     id: decl.id,
     kind: decl.kind,
