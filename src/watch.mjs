@@ -12,7 +12,7 @@
 //   node src/watch.mjs --once     single frame snapshot, no duties
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { acquireLock, releaseLock } from './lock.mjs';
 import { readAccounts as readAccountsFile, appendAccount } from './accounts.mjs';
 import { readTail, fileSig } from './jsonl.mjs';
@@ -91,18 +91,37 @@ export async function keeperSupplyTick({ upstreams, healthFor = async () => null
 }
 
 /**
- * Per-unit health READER for the keeper gate (single mode: H.healthFile; multi:
- * u.healthFile). Read-only by design: `fleet tick` is the only writer of
- * health.json. A watcher running health.step here would race tick on the
- * same file and hand the keeper a state no other consumer agrees with.
- * Fail-closed: an unreadable file blocks supply (unknown != healthy) and says so
- * in the event stream; a merely MISSING file stays fail-open.
+ * Where a unit's health.json is. `fleet tick` writes <unit>/data/health.json
+ * (fleet-hub picks the same path), so the keeper DERIVES it instead of
+ * demanding every project wire `healthFile` by hand. Explicit healthFile still
+ * wins (unit over H); then the unit's own accounts file directory; then the
+ * project root.
+ *
+ * This default is the difference between a working gate and a silent no-op:
+ * without healthFile the reader answered "no health configured" while tick was
+ * writing a halt next to the accounts file, and the keeper spawned against it.
+ */
+export function keeperHealthPath(u, H) {
+  if (u?.healthFile) return u.healthFile;
+  if (H?.healthFile) return H.healthFile;
+  const accountsFile = u?.accountsFile || H?.accountsFile;
+  if (accountsFile && isAbsolute(accountsFile)) return join(dirname(accountsFile), 'health.json');
+  return H?.root ? join(H.root, 'data', 'health.json') : null;
+}
+
+/**
+ * Per-unit health READER for the keeper gate. Read-only by design: `fleet tick`
+ * is the only writer of health.json. A watcher running health.step here would
+ * race tick on the same file and hand the keeper a state no other consumer
+ * agrees with. Fail-closed: an unreadable file blocks supply (unknown !=
+ * healthy) and says so in the event stream; a merely MISSING file stays
+ * fail-open (a project whose detector never wrote anything still works).
  */
 export function buildKeeperHealthFor(H, upstreams, emit = () => {}) {
-  const anyHealth = H.healthFile || upstreams.some((u) => u.healthFile);
+  const anyHealth = upstreams.some((u) => keeperHealthPath(u, H));
   if (!anyHealth) return async () => null;
   return async (u) => {
-    const healthPath = u.healthFile ?? null;
+    const healthPath = keeperHealthPath(u, H);
     if (!healthPath) return null;
     const gate = gateDecision(readHealthState(healthPath));
     if (gate.reason === 'health-unreadable') {
@@ -263,10 +282,11 @@ export async function runWatch(H) {
   // the process (ref'd). With the embedded gateway opt-in, an unref'd keeper would
   // exit after one frame and launchd would respawn it every few seconds.
   const timers = [];
+  let healthFor = null;
   if (keeper) {
     timers.push(setInterval(() => { for (const u of upstreams) refreshOneBalanceFor(u); }, H.balanceRotateSec * 1000));
     if (upstreams.some((u) => u.supply)) {
-      const healthFor = buildKeeperHealthFor(H, upstreams, emit);
+      healthFor = buildKeeperHealthFor(H, upstreams, emit);
       timers.push(setInterval(() => { keeperSupplyTick({ upstreams, healthFor }); }, 5_000));
     }
     if (H.holdOpen === false) for (const t of timers) t.unref?.();   // tests: return after the frame
@@ -288,7 +308,7 @@ export async function runWatch(H) {
           const row = {
             id: u.id, accts, balance, targetUsd: u.targetUsd,
             supplyEnabled: u.supplyEnabled !== false,
-            supply: { childPid: u.supply?.childPid ?? null, cooldownSec: u.supply?.cooldownSec ?? 0 },
+            supply: { childPid: u.supply?.childPid ?? null, cooldownSec: u.supply?.cooldownSec ?? 0, stalled: u.supply?.stalled ?? null },
             prevBalance: u.prevBalance,
           };
           u._row = row;
@@ -296,17 +316,26 @@ export async function runWatch(H) {
         });
       }
       const accts = multi ? upRows.flatMap((r) => r.accts) : readAccounts();
+      // "idle" while health.json says stop is the reading that hid a gated unit:
+      // the panel has to name the hold, or "nothing is happening" looks like a bug.
+      let supplyHeld = null;
+      if (healthFor && !multi) {
+        const h = await healthFor(upstreams[0]).catch(() => null);
+        const acts = Array.isArray(h?.actions) ? h.actions : [];
+        if (h?.status === 'halted' || acts.includes('stopSupply')) supplyHeld = { reason: h.reason || h.status, upstream: upstreams[0].id };
+      }
       const ctx = {
         accts,
         // single mode: the displayed balance is a data-layer fact, computed here so
         // the render stays pure (null = ledger unreadable)
-        ...(multi ? {} : { balance: poolBalance(accts, poolOpts(upstreams[0])) }),
+        ...(multi ? {} : { balance: poolBalance(accts, poolOpts(upstreams[0])), supplyHeld }),
         evts, stats, flight, now: nowMs, cols, rows, tty,
         gatewayState,
         keeper: {
           active: keeper,
           childPid: supply?.childPid ?? null,
           cooldownSec: supply?.cooldownSec ?? 0,
+          stalled: supply?.stalled ?? null,
         },
       };
       if (upRows) ctx.upstreams = upRows;

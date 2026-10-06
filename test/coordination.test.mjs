@@ -14,7 +14,7 @@ import { promisify } from 'node:util';
 import { readHealthState, gateDecision, updateHealth, step, loadHealth, isGated } from '../src/health.mjs';
 import { buildFleetProviders, createHealthGate } from '../src/fleet-hub.mjs';
 import { adopt } from '../src/fleet.mjs';
-import { buildKeeperHealthFor } from '../src/watch.mjs';
+import { buildKeeperHealthFor, keeperSupplyTick } from '../src/watch.mjs';
 
 const execFileP = promisify(execFile);
 const REPO = join(fileURLToPath(new URL('./', import.meta.url)), '..');
@@ -157,6 +157,30 @@ test('keeper health reader: unreadable blocks supply and is announced; missing s
   assert.deepEqual(events, [['health.unreadable', { upstream: 'u3', health: broken }]]);
 
   assert.equal(await buildKeeperHealthFor({}, [{ id: 'x' }])({ id: 'x' }), null, 'no health configured at all = ungated');
+});
+
+test('keeper health reader: derives <unit>/data/health.json when the project passes no healthFile', async () => {
+  // The gate must work without every project wiring the path by hand: fleet tick
+  // writes <unit>/data/health.json and this reader derives it, so a halt is
+  // never answered with "no health configured" (= spawn away).
+  const dir = tmp();
+  mkdirSync(join(dir, 'data'), { recursive: true });
+  writeFileSync(join(dir, 'data', 'health.json'), JSON.stringify({ status: 'halted', reason: 'register-broken', actions: ['stopRegistrar', 'stopSupply', 'haltProject'] }));
+  const calls = [];
+  const unit = { id: 'u', accountsFile: join(dir, 'data', 'accounts.jsonl'), supply: { check: () => calls.push('u') } };
+
+  // the production shape: single-upstream runWatch gets root + a RELATIVE accountsFile
+  const read = buildKeeperHealthFor({ root: dir, accountsFile: 'data/accounts.jsonl' }, [unit]);
+  assert.equal((await read(unit)).reason, 'register-broken');
+  await keeperSupplyTick({ upstreams: [unit], healthFor: read });
+  assert.deepEqual(calls, [], 'halted unit must not be replenished');
+
+  // explicit per-unit path still wins
+  const other = tmp();
+  const otherHealth = join(other, 'health.json');
+  writeFileSync(otherHealth, JSON.stringify({ status: 'ok', reason: null }));
+  const pinned = { id: 'u', accountsFile: join(dir, 'data', 'accounts.jsonl'), healthFile: otherHealth };
+  assert.equal((await buildKeeperHealthFor({ root: dir }, [pinned])(pinned)).status, 'ok');
 });
 
 // ── desired-state concurrency ──

@@ -114,6 +114,23 @@ test('poolBalance: an unreadable ledger is UNKNOWN (null), never the untouched a
   assert.match(single, /ledger unreadable/);
   assert.doesNotMatch(single, /\$20\.00/);
 
+  // supply gated by health.json says WHY — an "idle" line hides a halted unit
+  const held = defaultRender({
+    accts, balance: 4.98, evts: [], stats: { aiCalls: 0, aiCost: 0, byEndpoint: {}, fails: 0 }, flight: { workers: [] },
+    now: Date.now(), cols: 100, rows: 30, tty: false, gatewayState: 'fleet',
+    keeper: { active: true, childPid: null, cooldownSec: 0, stalled: null },
+    supplyHeld: { reason: 'no-credit', upstream: 'alpha' },
+  }, { targetUsd: 70, windowMin: 30, gatewayPort: 48799 });
+  assert.match(held, /supply\s+held · health\.json no-credit/);
+
+  // supply stalled by the zero-yield breaker says why too (and how to retry)
+  const stalled = defaultRender({
+    accts, balance: 4.98, evts: [], stats: { aiCalls: 0, aiCost: 0, byEndpoint: {}, fails: 0 }, flight: { workers: [] },
+    now: Date.now(), cols: 100, rows: 30, tty: false, gatewayState: 'fleet',
+    keeper: { active: true, childPid: null, cooldownSec: 0, stalled: { atUsd: 4.98, batches: 3 } },
+  }, { targetUsd: 70, windowMin: 30, gatewayPort: 48799 });
+  assert.match(stalled, /STALLED · 3 batches added no credit/);
+
   const multi = defaultRenderMulti({
     upstreams: [
       { id: 'alpha', accts, balance: null, targetUsd: 20, supplyEnabled: true, supply: { childPid: null, cooldownSec: 0 }, prevBalance: 19 },
@@ -135,6 +152,51 @@ test('supply controller: an unknown balance holds instead of spawning', () => {
   ctl.check();
   assert.equal(spawned, 0, 'unknown is not "below target"');
   assert.deepEqual(events, [['supply.hold', { reason: 'balance-unknown', target: 20 }]]);
+});
+
+/** A batch that never exits cleanly is not what we are testing: run one spawn to
+ *  completion by firing the exit handler the controller hooked. */
+function runBatch(ctl, exits) {
+  ctl.check();
+  exits.shift()();
+}
+
+test('supply controller: batches that add no credit open the breaker instead of spawning forever', () => {
+  const events = [];
+  const exits = [];
+  let spawned = 0;
+  let bal = 0;                                   // upstream mints accounts worth $0
+  const ctl = createSupplyController({
+    targetUsd: 70, perAccountUsd: 7, checkIntervalMs: 0, stallBatches: 3, balance: () => bal,
+    spawnBatch: () => { spawned++; return { pid: spawned, once: (ev, fn) => { if (ev === 'exit') exits.push(fn); } }; },
+    emit: (n, f) => events.push([n, f]),
+  });
+  for (let i = 0; i < 3; i++) runBatch(ctl, exits);
+  assert.equal(spawned, 3);
+  assert.deepEqual(ctl.stalled, { atUsd: 0, batches: 3 });
+  ctl.check();
+  assert.equal(spawned, 3, 'breaker open: the next check spawns nothing');
+  assert.equal(events.filter(([n]) => n === 'supply.stall').length, 1, 'says so once, not per check');
+
+  // credit arrives by another path (manual batch, campaign restored) -> re-arm
+  bal = 7;
+  ctl.check();
+  assert.equal(spawned, 4);
+  assert.equal(ctl.stalled, null);
+  assert.deepEqual(events.at(-2), ['supply.resume', { balance_usd: 7, was_usd: 0, target: 70 }]);
+});
+
+test('supply controller: a batch that pays for itself never counts toward the breaker', () => {
+  const exits = [];
+  let spawned = 0;
+  let bal = 0;
+  const ctl = createSupplyController({
+    targetUsd: 100, perAccountUsd: 7, checkIntervalMs: 0, stallBatches: 3, balance: () => bal,
+    spawnBatch: () => { spawned++; return { pid: spawned, once: (ev, fn) => { if (ev === 'exit') exits.push(fn); } }; },
+  });
+  for (let i = 0; i < 6; i++) { ctl.check(); bal += 7; exits.shift()(); }
+  assert.equal(spawned, 6, 'credit keeps arriving = keep replenishing');
+  assert.equal(ctl.stalled, null);
 });
 
 // local helper: read JSONL without importing jsonl.mjs twice

@@ -99,11 +99,17 @@ export function defaultRender(ctx, H) {
   if (supply) {
     add(
       c(ansi.dim, 'supply   ') +
-      (supply.childPid
-        ? c(ansi.yellow, 'refilling pid ' + supply.childPid)
-        : supply.active
-          ? c(ansi.dim, 'idle · target ' + money(targetUsd) + (supply.cooldownSec > 0 ? ' · next check ' + Math.ceil(supply.cooldownSec) + 's' : ''))
-          : c(ansi.gray, 'off (another watcher owns duties)')),
+      (ctx.supplyHeld
+        // gated by health.json: name the reason, do not say "idle"
+        ? c(ansi.yellow, 'held · health.json ' + ctx.supplyHeld.reason)
+        : supply.stalled
+          // A stopped loop that still says "idle" reads as "nothing to do" — say why.
+          ? c(ansi.red, 'STALLED · ' + supply.stalled.batches + ' batches added no credit · restart to retry')
+          : supply.childPid
+            ? c(ansi.yellow, 'refilling pid ' + supply.childPid)
+            : supply.active
+              ? c(ansi.dim, 'idle · target ' + money(targetUsd) + (supply.cooldownSec > 0 ? ' · next check ' + Math.ceil(supply.cooldownSec) + 's' : ''))
+              : c(ansi.gray, 'off (another watcher owns duties)')),
     );
   }
   add(
@@ -224,9 +230,11 @@ export function defaultRenderMulti(ctx, H) {
     const sp = spend.get(u.id);
     const supplyTxt = u.supplyEnabled === false
       ? c(ansi.gray, 'off')
-      : u.supply.childPid
-        ? c(ansi.yellow, 'pid ' + u.supply.childPid)
-        : c(ansi.dim, 'idle' + (u.supply.cooldownSec > 0 ? ' ' + Math.ceil(u.supply.cooldownSec) + 's' : ''));
+      : u.supply.stalled
+        ? c(ansi.red, 'stalled×' + u.supply.stalled.batches)
+        : u.supply.childPid
+          ? c(ansi.yellow, 'pid ' + u.supply.childPid)
+          : c(ansi.dim, 'idle' + (u.supply.cooldownSec > 0 ? ' ' + Math.ceil(u.supply.cooldownSec) + 's' : ''));
     add(
       c(ansi.bold, padVisible(u.id, idW)) +
       c(ansi.dim, ' ') + c(ansi.green, String(verified).padStart(3) + ' ok') +
@@ -363,6 +371,13 @@ export function feedLine(ev, c, W) {
     case 'supply.hold':
       return t + ' ' + padVisible(c(ansi.yellow, '▲ supply'), 17) +
         c(ansi.yellow, '  held') + c(ansi.dim, '  ' + (ev.upstream ? ev.upstream + ' ' : '') + String(ev.reason || ''));
+    case 'supply.stall':
+      return t + ' ' + padVisible(c(ansi.red, '▲ supply'), 17) +
+        c(ansi.red, '  stalled after ' + (ev.batches || '?') + ' batches with no credit') +
+        c(ansi.dim, '  $' + Number(ev.balance_usd ?? 0).toFixed(2) + ' < target ' + money(ev.target));
+    case 'supply.resume':
+      return t + ' ' + padVisible(c(ansi.green, '▲ supply'), 17) +
+        c(ansi.green, '  resumed') + c(ansi.dim, '  balance moved $' + Number(ev.was_usd ?? 0).toFixed(2) + ' → $' + Number(ev.balance_usd ?? 0).toFixed(2));
     case 'batch.start':
       return t + ' ' + c(ansi.dim, 'batch') + c(ansi.dim, '  start ×' + (ev.count || 1) + ' workers=' + (ev.workers || 1));
     case 'batch.done':

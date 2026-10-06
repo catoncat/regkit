@@ -40,6 +40,30 @@ test('register-broken: does not fire when any batch succeeded or signatures scat
   assert.equal(scattered.registerBroken, false);
 });
 
+test('halted is sticky: a weaker finding never downgrades it (the gateway gate would re-open)', () => {
+  // With supply stopped the dead-batch window ages out while the no-credit
+  // finding keeps firing — the exact shape that must not downgrade the status
+  // (and re-open the pool in the gateway).
+  const events = [
+    ...Array.from({ length: 5 }, () => ({ event: 'reg.fail', klass: 'http', detail: 'bad email 400' })),
+    { event: 'batch.done', ok: 0, failed: 3 }, { event: 'batch.done', ok: 0, failed: 2 }, { event: 'batch.done', ok: 0, failed: 4 },
+  ];
+  const accounts = ['a', 'b', 'c'].map((email, i) => ({ email, status: 'verified', created_at: `2026-09-1${i}`, balance_usd: 0 }));
+  const prev = { status: 'halted', reason: 'register-broken', since: '2026-09-15T00:00:00Z', actions: ['stopRegistrar', 'stopSupply', 'haltProject'] };
+
+  // both detectors firing at once (the flapping case): the newer finding must not win
+  const both = deriveTransition(prev, analyze({ events, accounts }), { now });
+  assert.equal(both.status, 'halted');
+  assert.equal(both.reason, 'register-broken');
+  assert.deepEqual(both.actions, ['stopRegistrar', 'stopSupply', 'haltProject']);
+  assert.equal(isGated(both), true);
+
+  // and with the window aged out entirely, no-credit alone cannot downgrade it
+  const agedOut = deriveTransition(prev, analyze({ accounts }), { now });
+  assert.equal(agedOut.status, 'halted');
+  assert.equal(agedOut.reason, 'register-broken');
+});
+
 // ── rule 2: no-credit ──
 test('no-credit: newest verified accounts all ~zero balance stops registration, pool KEEPS serving', () => {
   const accounts = [

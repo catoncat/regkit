@@ -130,24 +130,35 @@ export function deriveTransition(prev, findings, { now = new Date() } = {}) {
   // recovers it. Only a real transition rewrites the action list.
   const keep = { ...cur, evidence: findings.evidence, flaky: findings.flaky, actions: Array.isArray(cur.actions) ? cur.actions : [] };
 
-  const go = (status, reason, actions, extra = {}) => ({
-    ...keep,
-    status, reason,
-    since: cur.status === status && cur.reason === reason ? cur.since : nowIso,
-    actions,
-    ...extra,
-  });
+  // A halted unit never leaves halted on a re-derivation: only a human recover
+  // (or a patrol verdict) ends that state. A sliding window does not commute with
+  // a latched status — when the dead-batch evidence ages out while the weak
+  // finding keeps firing, re-deriving flips the unit to the weaker status and
+  // back — and each flip re-opens the gateway gate (isGated) for a pool that was
+  // halted on purpose. A reason rewrite WITHIN halted still applies — health.json
+  // keeps pointing at the newest machine-readable evidence.
+  const next = (() => {
+    const go = (status, reason, actions, extra = {}) => ({
+      ...keep,
+      status, reason,
+      since: cur.status === status && cur.reason === reason ? cur.since : nowIso,
+      actions,
+      ...extra,
+    });
 
-  if (findings.registerBroken) return go('halted', 'register-broken', ['stopRegistrar', 'stopSupply', 'haltProject']);
-  // no-credit says the REGISTRAR mints empty accounts — it says nothing about
-  // keys already in the pool. Stop registering/supplying, keep serving the
-  // remaining balance (degraded, NOT halted: isGated must not pull the pool).
-  if (findings.noCredit) return go('degraded', 'no-credit', ['stopRegistrar', 'stopSupply']);
-  if (findings.poolBroken) return go('degraded', 'pool-broken', ['removeModels']);
-  if (findings.delistedModels.length) return go('degraded', 'model-delisted', ['removeModels']);
-  // nothing firing: recover degraded back to ok; halted stays until reprobe (step() handles it)
-  if (cur.status === 'degraded') return go('ok', null, []);
-  return keep;
+    if (findings.registerBroken) return go('halted', 'register-broken', ['stopRegistrar', 'stopSupply', 'haltProject']);
+    // no-credit says the REGISTRAR mints empty accounts — it says nothing about
+    // keys already in the pool. Stop registering/supplying, keep serving the
+    // remaining balance (degraded, NOT halted: isGated must not pull the pool).
+    if (findings.noCredit) return go('degraded', 'no-credit', ['stopRegistrar', 'stopSupply']);
+    if (findings.poolBroken) return go('degraded', 'pool-broken', ['removeModels']);
+    if (findings.delistedModels.length) return go('degraded', 'model-delisted', ['removeModels']);
+    // nothing firing: recover degraded back to ok; halted stays until reprobe (step() handles it)
+    if (cur.status === 'degraded') return go('ok', null, []);
+    return keep;
+  })();
+
+  return cur.status === 'halted' && next.status !== 'halted' ? keep : next;
 }
 
 /**
