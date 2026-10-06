@@ -176,3 +176,21 @@ test('POST /v1/models/refresh re-pulls dynamic catalogs, skips static', async ()
   up.closeAllConnections?.(); up.close();
 });
 
+
+test('buildFleetProviders: a retired (dead) unit is not reachable; sunset still serves', async () => {
+  const root = tmp();
+  writeService(root, 'gone', {
+    id: 'gone', protocol: 'src/protocol.mjs', lifecycle: 'dead',
+    gateway: { prefix: 'gone', base: 'https://gone/v1' },
+    accounts: 'data/accounts.jsonl', usage: 'data/usage.jsonl',
+  });
+  writeService(root, 'fading', {
+    id: 'fading', protocol: 'src/protocol.mjs', lifecycle: 'sunset',
+    gateway: { prefix: 'fade', base: 'https://fade/v1' },
+    accounts: 'data/accounts.jsonl', usage: 'data/usage.jsonl',
+  });
+  const log = quietLog(root);
+  const { providers, entries } = await buildFleetProviders({ roots: [root], log });
+  assert.deepEqual(providers.map((p) => p.id), ['fading'], 'dead is skipped, sunset keeps serving until drained');
+  assert.equal(entries.has('gone'), false);
+});

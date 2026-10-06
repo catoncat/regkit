@@ -235,3 +235,48 @@ test('drain storm: genuine one-at-a-time exhaustion is untouched by the breaker'
   assert.equal(events.filter((e) => e.event === 'key.drained').length, 1);
   assert.equal(events.find((e) => e.event === 'pool.drain_storm'), undefined);
 });
+
+// ── pool-scoped 401: the upstream rejected OUR key, never the caller's ──
+// upstreamHeaders() strips every client credential and injects a pool key, so an
+// auth failure cannot be the caller's fault. A project classifier that parks 401
+// as 'client' used to hand the caller the upstream's "invalid API key" verbatim
+// (blaming the wrong party) and leave the dead key in the pool forever.
+test('401: a project classifier calling it client still drains the key and never shows the caller "invalid API key"', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rk-401-'));
+  const six = ['a', 'b', 'c', 'd', 'e', 'f'].map((k) => ({ email: k + '@x', status: 'verified', api_key: 'k-' + k, balance_usd: 1, checked_at: '2026-09-17T09:00:00Z' }));
+  const project = (status, _text) => (status === 401 ? 'client' : classifyDefault(status));
+  const { gw, accountsFile, eventsFile } = mkPool({ dir, accounts: six, extra: { classifyFailure: project } });
+  const stub = stubFetch(Object.fromEntries(six.map((a) => ['k-' + a.email[0], 401])));
+  try {
+    const r = res();
+    await gw.handleChat(req, r, body('hi'));
+    assert.equal(r._state.code, 503, 'the caller gets a pool verdict, not the upstream auth answer');
+    assert.match(r._state.body, /pool exhausted/);
+    assert.doesNotMatch(r._state.body, /invalid API key/i);
+  } finally { stub.restore(); }
+  const events = readEvents(eventsFile);
+  const fails = events.filter((e) => e.event === 'ai.fail');
+  assert.ok(fails.every((e) => e.klass === 'balance'), 'all 401s recorded as key death');
+  assert.equal(fails[0].klass_raw, 'client', 'the project classifier verdict stays on record');
+  assert.equal(events.filter((e) => e.event === 'key.drained').length, MAX_DRAINS_PER_REQUEST);
+  const storm = events.find((e) => e.event === 'pool.drain_storm');
+  assert.equal(storm.status, 401);
+  const persisted = readFileSync(accountsFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((a) => a.status === 'exhausted');
+  assert.equal(persisted.length, MAX_DRAINS_PER_REQUEST, 'the breaker still caps retirement');
+});
+
+test('400: a genuine client error is still passed through untouched (no drain)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rk-400-'));
+  const { gw, eventsFile } = mkPool({ dir, accounts: twoKeys });
+  const stub = stubFetch({ 'k-a': 400 });
+  try {
+    const r = res();
+    await gw.handleChat(req, r, body('hi'));
+    assert.equal(r._state.code, 400);
+    assert.match(r._state.body, /upstream said 400/);
+  } finally { stub.restore(); }
+  const events = readEvents(eventsFile);
+  assert.equal(events.filter((e) => e.event === 'key.drained').length, 0);
+  assert.equal(events.find((e) => e.event === 'ai.fail').klass, 'client');
+  assert.equal(events.find((e) => e.event === 'ai.fail').klass_raw, undefined);
+});

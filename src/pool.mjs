@@ -321,7 +321,19 @@ export function createKeyPool(provider) {
         log.event('classify.fail', { upstream: id, status: upstream.status, error: String(err?.message || err).slice(0, 80), fallback: reason });
       }
       if (!reason) reason = classifyDefault(upstream.status);
-      log.event('ai.fail', { upstream: id, email: rec.email, status: upstream.status, klass: reason, detail: String(errorText(failureBody)).slice(0, 80) });
+      // upstreamHeaders() strips every client credential and injects a pool key, so
+      // the key the upstream just rejected is always OURS: an auth failure can never
+      // be the caller's fault, and answering with the upstream's "invalid API key"
+      // blames the wrong party (a pool-scoped 401 attributed to the caller). A
+      // project classifier that parks 401 as 'client' (pass-through) would also leave
+      // the dead key in the pool forever. Treat it as this key's death and rotate.
+      const klassRaw = reason;
+      if (upstream.status === 401 && reason === 'client') reason = 'balance';
+      log.event('ai.fail', {
+        upstream: id, email: rec.email, status: upstream.status, klass: reason,
+        ...(klassRaw === reason ? {} : { klass_raw: klassRaw }),
+        detail: String(errorText(failureBody)).slice(0, 80),
+      });
 
       if (reason === 'client') {
         res.writeHead(upstream.status, responseHeaders(upstream));
@@ -338,6 +350,9 @@ export function createKeyPool(provider) {
         // every key in the pool within a single request.
         if (drains >= MAX_DRAINS_PER_REQUEST) {
           log.event('pool.drain_storm', { upstream: id, model: model || null, drained: drains, status: upstream.status, detail: String(errorText(failureBody)).slice(0, 80) });
+          // …but never hand the caller the upstream's auth message: it names OUR key,
+          // so it reads as "your key is wrong". Fall out to the clean pool error.
+          if (upstream.status === 401) break;
           res.writeHead(upstream.status, responseHeaders(upstream));
           res.end(failureBody);
           return;

@@ -56,6 +56,13 @@ export async function buildFleetProviders({ roots = DEFAULT_ROOTS, log } = {}) {
     if (!f.decl || !f.decl.gateway) continue;
     const d = f.decl;
     const gw = d.gateway;
+    // Retired means gone: sunset keeps serving until drained, dead must not be
+    // reachable at all (otherwise "retire" only hides the pool from the catalog
+    // while its prefix still routes and drains keys).
+    if (d.lifecycle === 'dead') {
+      log?.event?.('hub.provider_skipped', { upstream: d.id, reason: 'dead' });
+      continue;
+    }
     const healthPath = healthPathFor(f.unitDir);
     entries.set(d.id, { healthPath, unitDir: f.unitDir });
 
