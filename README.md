@@ -22,6 +22,7 @@ store, the usage ledger, the gateway, the watcher — lives here.
 | `supply` | Single-flight top-up when pool balance falls below a target |
 | `pacer` | AIMD pacing for a rate-limited submit step |
 | `mailbox` / `domains` | Poll a mailbox CLI for codes or links; round-robin mail domains |
+| `turnstile` | Mint a Turnstile token or `cf_clearance` via the cfsolve `challenge` CLI |
 | `http` | `fetch` wrapper that emits one event per call and classifies failures |
 | `logger` / `events` | stderr + `events.jsonl` logging; windowed stats over events |
 | `lock` / `jsonl` | Single-instance lock, cross-process file lock, atomic JSONL I/O |
@@ -84,9 +85,30 @@ Then replace three files with the real upstream's facts:
 `cli.mjs`, `register.mjs`, `gateway.mjs` and `watch.mjs` are thin wiring and
 rarely change. See [skeleton/README.md](skeleton/README.md) for the protocol contract.
 
-If the upstream's pages sit behind Cloudflare Turnstile or a similar browser check,
-HTTP replay won't get through. Use [regkit-headed](https://github.com/catoncat/regkit-headed)
-(Python, real Chrome) for that part, and keep the pool, gateway and watcher here.
+If the only blocker is a Turnstile widget token, `turnstile` can mint one
+without a browser. It shells out to the [cfsolve](https://github.com/chris124567/cfsolve)
+`challenge` binary (`RH_CFSOLVE_BIN`, `RH_CFSOLVE_PROFILE`):
+
+```js
+import { solveTurnstile } from 'regkit/turnstile';
+
+const { token } = await solveTurnstile({
+  pageUrl: 'https://auth.example.com/sign-up',
+  sitekey: process.env.TURNSTILE_SITEKEY,
+  proxy: process.env.PROXY, // same egress as the request that submits `token`
+});
+```
+
+Omit `sitekey` to solve the page's first widget or clear a challenge page
+(`cfClearance`). A clearance cookie also requires the business request to
+match the profile's TLS fingerprint and `userAgent`; a widget token usually
+needs only the same IP. Pass `blankPage: true` only when you have a sitekey
+and no page HTML.
+
+Complex SPAs (multi-step flows, their own signatures) and a solver that
+Cloudflare has broken still belong in
+[regkit-headed](https://github.com/catoncat/regkit-headed) (Python, real Chrome).
+The pool, gateway and watcher stay here either way.
 
 ## Gateway
 

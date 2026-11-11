@@ -7,6 +7,7 @@ export * from './config.mjs';
 export * from './logger.mjs';
 export * from './pacer.mjs';
 export * from './mailbox.mjs';
+export * from './turnstile.mjs';
 export * from './domains.mjs';
 export * from './accounts.mjs';
 export * from './http.mjs';

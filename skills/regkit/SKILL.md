@@ -37,9 +37,13 @@ description: >-
 
 Measure the upstream before encoding it: record real request/response pairs, status
 codes and rate-limit behaviour, and write only observed facts into `protocol.mjs`.
-If the upstream's signup requires a real browser (Cloudflare Turnstile and similar),
-HTTP replay will not work. Use regkit-headed (https://github.com/catoncat/regkit-headed,
-Python + real Chrome) for that step; the pool, gateway and watcher still apply.
+If signup needs only a Turnstile token, call `solveTurnstile` from `regkit/turnstile`.
+It shells out to the cfsolve `challenge` binary (`RH_CFSOLVE_BIN`, `RH_CFSOLVE_PROFILE`).
+The proxy must be the same egress as the business request. A `cfClearance` cookie also
+needs the profile's TLS fingerprint and User-Agent; a widget token usually needs only the IP.
+Complex SPAs, or a solver Cloudflare has broken, still use regkit-headed
+(https://github.com/catoncat/regkit-headed, Python + real Chrome). The pool, gateway
+and watcher still apply either way.
 
 ## Mail dependency
 

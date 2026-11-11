@@ -9,6 +9,7 @@
     "./logger": "./src/logger.mjs",
     "./pacer": "./src/pacer.mjs",
     "./mailbox": "./src/mailbox.mjs",
+    "./turnstile": "./src/turnstile.mjs",
     "./domains": "./src/domains.mjs",
     "./accounts": "./src/accounts.mjs",
     "./http": "./src/http.mjs",
